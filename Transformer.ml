@@ -165,10 +165,12 @@ module Mlp_layer = struct
 
   let apply self state : update =
     let out = ref (State.zero ()) in
-    Array.iter self.mlps ~f:(fun mlp ->
-        let pre_act = State.query mlp.Neuron.read state in
+    Array.iter self.mlps ~f:(fun neuron ->
+        let pre_act = State.query neuron.Neuron.read state in
         let post_act = self.nonlinear pre_act in
-        let unit_out : update = Array.map mlp.Neuron.write ~f:(fun f -> f *. post_act) in
+        let unit_out : update =
+          Array.map neuron.Neuron.write ~f:(fun f -> f *. post_act)
+        in
         out := State.update !out unit_out);
     !out
   ;;
