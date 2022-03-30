@@ -117,21 +117,33 @@ module Attn_head = struct
     { w_q : State.t -> attn_vector
     ; w_k : State.t -> attn_vector
     ; w_v : State.t -> attn_vector
-    ; w_o : State.t -> attn_vector
+    ; w_o : State.t -> update
     }
 
   let apply self states =
+    (* Apply projections to produce Q, K, and V vectors for each token position. *)
     let qs : attn_vector array = Array.map ~f:self.w_q states in
     let ks : attn_vector array = Array.map ~f:self.w_k states in
     let vs : attn_vector array = Array.map ~f:self.w_v states in
     let values = Array.map states ~f:(fun _ -> Array.create ~len:d_head 0.0) in
+    (* Compute the output for each position *)
     Array.iteri qs ~f:(fun src my_q ->
+        (* Compute an attention score between the current position and each
+           *earlier* position by a dot product between our Q and their K
+           vector. *)
         let scores : float array = Array.init src ~f:(fun i -> Vector.dot my_q ks.(i)) in
+        (* Softmax to turn scores into a probability distribution. *)
         softmax scores;
-        Array.zip_exn scores vs
-        |> Array.iter ~f:(fun (score, v) ->
-               Array.iteri v ~f:(fun i v ->
-                   values.(src).(i) <- values.(src).(i) +. (v *. score))));
+        (* For each visible (earlier) position, scale their V vector by the
+           attention weight and sum. *)
+        for i = 0 to src do
+          let score = scores.(i) in
+          let v = vs.(i) in
+          Array.iteri v ~f:(fun j vj ->
+              values.(src).(j) <- values.(src).(j) +. (vj *. score))
+        done);
+    (* Use the O projection to make a full state vector from a value vector for
+       each position. *)
     Array.map values ~f:self.w_o
   ;;
 end
@@ -140,6 +152,7 @@ module Attn_layer = struct
   type t = Attn_head.t array
 
   let apply self states : update array =
+    (* Apply each attention head and sum outputs. *)
     let updates : update array ref = ref (Array.map states ~f:(fun _ -> State.zero ())) in
     Array.iter self ~f:(fun h ->
         let head_out = Attn_head.apply h states in
@@ -155,6 +168,12 @@ module Neuron = struct
     { read : query
     ; write : update
     }
+
+  let apply { read; write } activation state : update =
+    let pre_act = State.query read state in
+    let post_act = activation pre_act in
+    Array.map write ~f:(fun f -> f *. post_act)
+  ;;
 end
 
 module Mlp_layer = struct
@@ -165,12 +184,9 @@ module Mlp_layer = struct
 
   let apply self state : update =
     let out = ref (State.zero ()) in
+    (* Apply each neuron in parallel and sum output. *)
     Array.iter self.mlps ~f:(fun neuron ->
-        let pre_act = State.query neuron.Neuron.read state in
-        let post_act = self.nonlinear pre_act in
-        let unit_out : update =
-          Array.map neuron.Neuron.write ~f:(fun f -> f *. post_act)
-        in
+        let unit_out = Neuron.apply neuron self.nonlinear state in
         out := State.update !out unit_out);
     !out
   ;;
@@ -203,7 +219,9 @@ module Transformer = struct
     }
 
   let apply self tokens : logits array =
+    (* Embed each token into an initial state. *)
     let states = tokens |> Array.map ~f:(Embedding.apply self.embedding) |> ref in
+    (* Run each layer over the hidden state. *)
     Array.iter self.layers ~f:(fun layer ->
         let attn_out = Attn_layer.apply layer.Res_block.attn !states in
         states
@@ -214,6 +232,7 @@ module Transformer = struct
           let mlp_out = Mlp_layer.apply layer.Res_block.mlps states.(i) in
           states.(i) <- State.update states.(i) mlp_out
         done);
+    (* Unembed the hidden state to get a prediction. *)
     Array.map !states ~f:(Unembedding.apply self.unembedding)
   ;;
 end

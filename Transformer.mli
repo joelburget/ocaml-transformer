@@ -1,14 +1,17 @@
 type token = int
 
+(** A basic 1-dimensional vector. *)
 module Vector : sig
   type t = float array
 
   val dot : t -> t -> float
 end
 
+(** Logits represent the model's prediction for the next token (one logit value per entry
+    in the vocabulary). *)
 type logits = Vector.t
 
-(** Representation of data seen after every token. *)
+(** Representation of data seen after every token. ("hidden state") *)
 module State : sig
   type t = float array
 
@@ -18,7 +21,10 @@ module State : sig
   val query : t -> t -> float
 end
 
+(** Vector used to query the state. *)
 type query = State.t
+
+(** Vector used to update the state (by addition). *)
 type update = State.t
 
 (** Embed a token (to a state). *)
@@ -38,25 +44,27 @@ module Attn_head : sig
     { w_q : State.t -> attn_vector (** query *)
     ; w_k : State.t -> attn_vector (** key *)
     ; w_v : State.t -> attn_vector (** value *)
-    ; w_o : State.t -> attn_vector (** output *)
+    ; w_o : State.t -> update (** output *)
     }
 
   val apply : t -> State.t array -> attn_vector array
 end
 
-(** An attention layer is multiple heads operating in parallel. *)
+(** An attention layer is multiple ([d_head = 128]) heads operating in parallel. *)
 module Attn_layer : sig
   type t = Attn_head.t array
 
   val apply : t -> State.t array -> update array
 end
 
-(** A neuron reads and writes to the state. *)
+(** A neuron reads state, runs an activation function, and outputs state. *)
 module Neuron : sig
   type t =
     { read : query
     ; write : update
     }
+
+  val apply : t -> (float -> float) -> State.t -> update
 end
 
 (** An mlp layer is a set of neurons each reading from the same input state and
